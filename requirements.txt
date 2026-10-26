@@ -1,3 +1,4 @@
-# Versions used for the baseline migration smoke check.
+# Tested web runtime: Python 3.12.
+streamlit==1.66.1
 openpyxl==3.1.5
 Pillow==10.4.0

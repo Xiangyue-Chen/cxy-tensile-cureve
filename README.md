@@ -4,6 +4,25 @@
 
 `处理拉伸数据.py` 从本地“处理热膨胀系数”项目中独立整理而来，本次保留原脚本和算法。仓库仅包含拉伸处理代码，不包含真实实验数据、热膨胀/居里温度处理代码或生成结果。
 
+## 在线网页
+
+仓库包含 Streamlit 在线工具，支持批量上传 `.xlsx`、`.csv` 或保留目录结构的 `.zip`，网页中预览曲线和性能表，并下载单项结果或完整 ZIP。
+
+```powershell
+python -m pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
+
+打开终端显示的本地网址即可使用。也可在 [Streamlit Community Cloud](https://share.streamlit.io/) 选择此 GitHub 仓库、`main` 分支和入口文件 `streamlit_app.py`，部署为可分享的网址。建议部署时选择 Python 3.12；`packages.txt` 会为 Linux 安装 Noto CJK 中文字体。
+
+网页每次处理使用独立临时目录，成功、失败或超时后清理。下载包不包含原始上传文件；服务日志仍可能包含文件级错误信息，涉及保密实验时应按所在单位的数据规则选择部署环境和访问范围。
+
+- 单个上传项不超过 20 MiB，总计不超过 60 MiB。
+- ZIP 展开后不超过 100 MiB，最多包含 30 个数据文件；不接受嵌套 ZIP、越界路径或符号链接。
+- 散装 CSV 会自动适配为仪器 `_Exports` 目录。需要同目录汇总表匹配或保留批次结构时，请上传 ZIP。
+- 上传文件变化后，页面会清除旧处理结果，避免把旧结果误认为当前输入。
+- “运行合成示例”只用于体验处理流程，不代表真实实验精度。
+
 ## 安装与运行
 
 建议 Python 3.10 或更新版本；本次验证环境为 Python 3.12.7、openpyxl 3.1.5、Pillow 10.4.0。脚本不依赖同目录的其他 Python 文件。

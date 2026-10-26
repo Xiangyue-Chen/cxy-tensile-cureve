@@ -17,6 +17,7 @@ curve_index.csv
 # Local configuration and editor files
 .env
 .env.*
+.streamlit/secrets.toml
 .idea/
 .vscode/
 Thumbs.db

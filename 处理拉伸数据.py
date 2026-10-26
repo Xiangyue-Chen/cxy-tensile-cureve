@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import re
 import sys
 from collections import defaultdict
@@ -1019,7 +1020,13 @@ def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
 
-    font_path = Path("C:/Windows/Fonts/msyh.ttc")
+    font_candidates = [
+        Path("C:/Windows/Fonts/msyh.ttc"),
+        Path(os.environ.get("TENSILE_FONT_PATH", "__no_custom_font__")),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"),
+    ]
+    font_path = next((candidate for candidate in font_candidates if candidate.is_file()), font_candidates[0])
     if font_path.exists():
         title_font = ImageFont.truetype(str(font_path), 42)
         label_font = ImageFont.truetype(str(font_path), 28)
