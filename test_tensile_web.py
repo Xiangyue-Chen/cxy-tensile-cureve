@@ -246,6 +246,78 @@ def test_demo_returns_readable_output_only_and_relative_picture_paths():
             wb.close()
 
 
+def test_demo_exposes_bounded_curve_data_for_custom_plotting():
+    web = api()
+    result = web.process_uploads(web.make_demo_uploads())
+
+    assert len(result.plot_curves) == 2
+    assert len({curve["curve_id"] for curve in result.plot_curves}) == 2
+    for curve in result.plot_curves:
+        assert curve["sample_id"].startswith("C900-")
+        assert 2 <= len(curve["x"]) == len(curve["y"]) <= 2000
+        assert all(isinstance(value, (int, float)) for value in curve["x"])
+        assert all(isinstance(value, (int, float)) for value in curve["y"])
+    assert "plot_curves.json" not in result.files
+
+
+def test_overlay_mode_returns_one_png_containing_multiple_curve_colors():
+    web = api()
+    result = web.process_uploads(web.make_demo_uploads())
+
+    outputs = web.build_plot_outputs(
+        result.plot_curves,
+        mode="overlay",
+        title="Tensile stress-strain curves",
+    )
+
+    assert list(outputs) == ["selected_curves.png"]
+    with Image.open(BytesIO(outputs["selected_curves.png"])) as image:
+        image.verify()
+    with Image.open(BytesIO(outputs["selected_curves.png"])) as image:
+        assert image.info["dpi"][0] == pytest.approx(300, abs=1)
+        saturated_colors = {
+            pixel for pixel in image.convert("RGB").getdata()
+            if max(pixel) - min(pixel) >= 60 and max(pixel) < 245
+        }
+        assert len(saturated_colors) >= 2
+
+
+def test_separate_mode_returns_one_png_per_selected_curve():
+    web = api()
+    result = web.process_uploads(web.make_demo_uploads())
+
+    outputs = web.build_plot_outputs(result.plot_curves, mode="separate", title="")
+
+    assert len(outputs) == 2
+    assert len({name.casefold() for name in outputs}) == 2
+    assert all(name.endswith(".png") for name in outputs)
+    for data in outputs.values():
+        with Image.open(BytesIO(data)) as image:
+            image.verify()
+
+
+def test_custom_plotting_requires_at_least_one_curve():
+    web = api()
+    with pytest.raises(web.ProcessingError, match="曲线"):
+        web.build_plot_outputs([], mode="overlay", title="")
+
+
+def test_separate_mode_limits_one_request_to_24_high_resolution_images():
+    web = api()
+    curves = [
+        {
+            "curve_id": f"curve_{index:04d}",
+            "sample_id": f"sample-{index}",
+            "run_name": "",
+            "x": [0.0, 1.0],
+            "y": [0.0, 100.0],
+        }
+        for index in range(25)
+    ]
+    with pytest.raises(web.ProcessingError, match="24"):
+        web.build_plot_outputs(curves, mode="separate", title="")
+
+
 def test_two_archives_keep_same_named_curves_separate():
     web = api()
     a = zip_bytes([("folder/curve.CSV", csv_curve("C993-合成演示-1"))])

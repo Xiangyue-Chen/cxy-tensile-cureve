@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from io import BytesIO, StringIO
 from pathlib import Path, PurePosixPath
 import csv
+import importlib.util
 import json
 import math
 import os
@@ -30,6 +31,7 @@ MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_TOTAL_BYTES = 60 * 1024 * 1024
 MAX_EXPANDED_BYTES = 100 * 1024 * 1024
 MAX_DATA_FILES = 30
+MAX_SEPARATE_PLOTS = 24
 _MAX_ARCHIVE_ENTRIES = 2000
 _ZIP_IO_CHUNK = 64 * 1024
 _LOCAL_FILE_HEADER = struct.Struct("<4s5H3L2H")
@@ -55,6 +57,7 @@ class ProcessingResult:
     errors: list[dict[str, str]]
     uploaded_count: int
     archive: bytes
+    plot_curves: list[dict[str, object]]
 
 
 class ProcessingError(Exception):
@@ -287,6 +290,78 @@ def _clean_workbook(path: Path) -> None:
         wb.close()
 
 
+def _load_plot_curves(path: Path, expected_count: int) -> list[dict[str, object]]:
+    if not path.is_file():
+        raise ProcessingError("处理进程未生成可选曲线数据，请重新处理文件。")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ProcessingError("可选曲线数据损坏，请重新处理文件。") from exc
+    if not isinstance(payload, list) or len(payload) != expected_count:
+        raise ProcessingError("可选曲线数量与结果索引不一致，请重新处理文件。")
+    seen: set[str] = set()
+    curves: list[dict[str, object]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ProcessingError("可选曲线数据格式无效，请重新处理文件。")
+        curve_id = item.get("curve_id")
+        x, y = item.get("x"), item.get("y")
+        if (not isinstance(curve_id, str) or not curve_id or curve_id in seen or
+                not isinstance(x, list) or not isinstance(y, list) or
+                not 2 <= len(x) == len(y) <= 2000 or
+                any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in (*x, *y))):
+            raise ProcessingError("可选曲线数据格式无效，请重新处理文件。")
+        seen.add(curve_id)
+        curves.append(item)
+    return curves
+
+
+def _plot_module():
+    spec = importlib.util.spec_from_file_location("_tensile_plot_runtime", _CLI_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise ProcessingError("绘图模块无法加载，请稍后重试。")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _plot_file_name(curve: dict[str, object], index: int) -> str:
+    label = str(curve.get("sample_id") or curve.get("run_name") or curve.get("curve_id") or "curve")
+    safe = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "_", label).strip("._-")[:80] or "curve"
+    return f"{index:02d}_{safe}.png"
+
+
+def build_plot_outputs(curves: list[dict[str, object]], *, mode: str, title: str) -> dict[str, bytes]:
+    """Render selected session curves as one overlay or separate publication PNGs."""
+    if not curves:
+        raise ProcessingError("请至少选择一条曲线后再生成图片。")
+    if mode not in {"overlay", "separate"}:
+        raise ProcessingError("不支持的出图方式。")
+    if mode == "separate" and len(curves) > MAX_SEPARATE_PLOTS:
+        raise ProcessingError(f"单独出图每次最多选择 {MAX_SEPARATE_PLOTS} 条曲线，请减少选择后重试。")
+    title = str(title)[:120]
+    module = _plot_module()
+    outputs: dict[str, bytes] = {}
+    try:
+        with tempfile.TemporaryDirectory(prefix="tensile_plot_") as temporary:
+            root = Path(temporary)
+            batches = [("selected_curves.png", curves)] if mode == "overlay" else [
+                (_plot_file_name(curve, index), [curve])
+                for index, curve in enumerate(curves, start=1)
+            ]
+            for name, batch in batches:
+                target = root / name
+                module.plot_curve_set(batch, target, title, max_legend=24)
+                if not target.is_file():
+                    raise ProcessingError("所选曲线无法生成图片，请检查数据。")
+                outputs[name] = target.read_bytes()
+    except ProcessingError:
+        raise
+    except (OSError, ValueError, TypeError) as exc:
+        raise ProcessingError("所选曲线生成图片失败，请检查数据。") from exc
+    return outputs
+
+
 def _collect_results(output_root: Path, sources: list[str], warnings: list[str],
                      uploaded_count: int, temporary_root: Path) -> ProcessingResult:
     index_path = output_root / "curve_index.csv"
@@ -334,6 +409,9 @@ def _collect_results(output_root: Path, sources: list[str], warnings: list[str],
     if not rows:
         details = [e["source_file"] + "：" + e["error"] for e in errors] + warnings
         raise ProcessingError("没有识别到有效拉伸曲线。" + ("\n" + "\n".join(details[:8]) if details else ""))
+    plot_data_path = output_root / "plot_curves.json"
+    plot_curves = _load_plot_curves(plot_data_path, len(rows))
+    plot_data_path.unlink()
     with index_path.open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
@@ -352,7 +430,7 @@ def _collect_results(output_root: Path, sources: list[str], warnings: list[str],
     with zipfile.ZipFile(archive_bytes, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, data in files.items():
             archive.writestr(name, data)
-    return ProcessingResult(rows, files, warnings, errors, uploaded_count, archive_bytes.getvalue())
+    return ProcessingResult(rows, files, warnings, errors, uploaded_count, archive_bytes.getvalue(), plot_curves)
 
 
 def process_uploads(uploads: list[Upload], *, timeout_seconds: float = 120) -> ProcessingResult:

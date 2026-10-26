@@ -2,11 +2,20 @@
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 from pathlib import PurePosixPath
+import zipfile
 
 import streamlit as st
 
-from tensile_web import ProcessingError, ProcessingResult, Upload, make_demo_uploads, process_uploads
+from tensile_web import (
+    ProcessingError,
+    ProcessingResult,
+    Upload,
+    build_plot_outputs,
+    make_demo_uploads,
+    process_uploads,
+)
 
 
 st.set_page_config(
@@ -54,16 +63,106 @@ def _fingerprint(uploaded_files) -> str:
 def _clear_result() -> None:
     st.session_state.result = None
     st.session_state.result_source = None
+    for key in ("plot_curve_selection", "plot_mode", "plot_title", "custom_plot_preview", "preview_image"):
+        st.session_state.pop(key, None)
 
 
 def _run(uploads: list[Upload], source: str) -> None:
     try:
+        for key in ("plot_curve_selection", "plot_mode", "plot_title", "custom_plot_preview", "preview_image"):
+            st.session_state.pop(key, None)
         with st.spinner("正在识别曲线、计算性能并生成结果…"):
             st.session_state.result = process_uploads(uploads)
         st.session_state.result_source = source
     except ProcessingError as exc:
         _clear_result()
         st.error(str(exc))
+
+
+def _curve_label(curve: dict[str, object]) -> str:
+    name = str(curve.get("sample_id") or curve.get("run_name") or curve.get("curve_id") or "未命名曲线")
+    source = PurePosixPath(str(curve.get("source_file") or "")).name
+    return f"{name} · {source}" if source else name
+
+
+def _zip_outputs(files: dict[str, bytes]) -> bytes:
+    stream = BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    return stream.getvalue()
+
+
+def _show_custom_plotter(result: ProcessingResult) -> None:
+    st.subheader("Nature 风格自定义绘图")
+    st.caption("自由选择一条或多条曲线；默认叠加到同一张图，也可分别生成。图片为白底、简洁坐标轴、色盲友好配色和 300 dpi PNG。")
+    curve_map = {str(curve["curve_id"]): curve for curve in result.plot_curves}
+    curve_ids = list(curve_map)
+    selected_ids = st.multiselect(
+        "选择曲线（可多选）",
+        curve_ids,
+        default=curve_ids,
+        format_func=lambda curve_id: _curve_label(curve_map[curve_id]),
+        key="plot_curve_selection",
+    )
+    mode_label = st.radio(
+        "出图方式",
+        ["叠加对比", "单独出图"],
+        horizontal=True,
+        key="plot_mode",
+    )
+    title = st.text_input(
+        "图标题（留空则不显示）",
+        value="Tensile stress–strain curves",
+        max_chars=120,
+        key="plot_title",
+    )
+    if not selected_ids:
+        st.info("请至少选择一条曲线。")
+        return
+    try:
+        outputs = build_plot_outputs(
+            [curve_map[curve_id] for curve_id in selected_ids],
+            mode="overlay" if mode_label == "叠加对比" else "separate",
+            title=title.strip(),
+        )
+    except ProcessingError as exc:
+        st.error(str(exc))
+        return
+
+    if mode_label == "叠加对比":
+        name, data = next(iter(outputs.items()))
+        st.image(data, caption=f"已叠加 {len(selected_ids)} 条曲线", width="stretch")
+        st.download_button(
+            "下载所选曲线合并图 PNG",
+            data=data,
+            file_name=name,
+            mime="image/png",
+            type="primary",
+            key="download_custom_overlay",
+        )
+        return
+
+    preview_name = st.selectbox(
+        "预览单独图片",
+        list(outputs),
+        key="custom_plot_preview",
+    )
+    st.image(outputs[preview_name], caption=preview_name, width="stretch")
+    st.download_button(
+        "下载所选曲线单独图片 ZIP",
+        data=_zip_outputs(outputs),
+        file_name="selected_curves_separate.zip",
+        mime="application/zip",
+        type="primary",
+        key="download_custom_separate",
+    )
+    with st.expander("下载单张自定义图片"):
+        for index, (name, data) in enumerate(outputs.items()):
+            st.download_button(
+                f"下载 {name}", data=data, file_name=name, mime="image/png",
+                key=f"download_custom_single_{index}",
+            )
 
 
 def _show_results(result: ProcessingResult) -> None:
@@ -91,16 +190,18 @@ def _show_results(result: ProcessingResult) -> None:
     st.dataframe(table, width="stretch", hide_index=True)
     st.caption("Rp0.2、Rm：MPa；均匀延伸率、At：%；E：GPa。空值表示自动判据未通过，请结合原始曲线核对。")
 
+    _show_custom_plotter(result)
+
     images = sorted(name for name in result.files if name.lower().endswith(".png"))
     if images:
-        st.subheader("曲线预览")
-        chosen = st.selectbox(
-            "选择图片",
-            images,
-            format_func=lambda name: PurePosixPath(name).name,
-            key="preview_image",
-        )
-        st.image(result.files[chosen], caption=chosen, width="stretch")
+        with st.expander("查看后台自动生成的文件/分组图"):
+            chosen = st.selectbox(
+                "选择图片",
+                images,
+                format_func=lambda name: PurePosixPath(name).name,
+                key="preview_image",
+            )
+            st.image(result.files[chosen], caption=chosen, width="stretch")
 
     st.subheader("下载结果")
     st.download_button(
@@ -138,7 +239,7 @@ st.markdown(
     <section class="hero">
       <div class="eyebrow">TENSILE CURVE WORKBENCH</div>
       <h1>拉伸曲线在线处理</h1>
-      <p>上传仪器导出的 Excel、CSV 或保留原目录结构的 ZIP，自动完成曲线清理、性能计算、分组绘图和结果打包。</p>
+      <p>上传仪器导出的 Excel、CSV 或保留原目录结构的 ZIP，自动完成曲线清理和性能计算，并自由组合生成论文风格图片。</p>
     </section>
     """,
     unsafe_allow_html=True,

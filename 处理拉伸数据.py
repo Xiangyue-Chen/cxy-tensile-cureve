@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import os
 import re
@@ -302,7 +303,7 @@ def find_curve_pairs(ws: Any) -> list[dict[str, Any]]:
 def downsample_xy(x: list[float], y: list[float], max_points: int = 2500) -> tuple[list[float], list[float]]:
     if len(x) <= max_points:
         return x, y
-    step = max(1, len(x) // max_points)
+    step = max(1, math.ceil(len(x) / max_points))
     return x[::step], y[::step]
 
 
@@ -1012,34 +1013,34 @@ def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max
     legend_count = min(len(plot_data), max_legend)
     legend_cols = 2 if legend_count > 1 else 1
     legend_rows = max(1, math.ceil(legend_count / legend_cols))
-    width = 2400
-    left, top, right, bottom = 140, 120, width - 90, 960
-    legend_top = bottom + 95
-    legend_row_h = 36
-    height = legend_top + legend_rows * legend_row_h + 95
+    width = 2000
+    left, top, right, bottom = 175, (145 if title else 100), width - 110, 1000
+    legend_top = bottom + 105
+    legend_row_h = 42
+    height = legend_top + legend_rows * legend_row_h + 80
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
 
     font_candidates = [
-        Path("C:/Windows/Fonts/msyh.ttc"),
         Path(os.environ.get("TENSILE_FONT_PATH", "__no_custom_font__")),
+        Path("C:/Windows/Fonts/msyh.ttc"),
+        Path("C:/Windows/Fonts/arial.ttf"),
         Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
         Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"),
     ]
     font_path = next((candidate for candidate in font_candidates if candidate.is_file()), font_candidates[0])
     if font_path.exists():
-        title_font = ImageFont.truetype(str(font_path), 42)
+        title_font = ImageFont.truetype(str(font_path), 38)
         label_font = ImageFont.truetype(str(font_path), 28)
         tick_font = ImageFont.truetype(str(font_path), 22)
-        legend_font = ImageFont.truetype(str(font_path), 21)
-        legend_small_font = ImageFont.truetype(str(font_path), 18)
+        legend_small_font = ImageFont.truetype(str(font_path), 17)
     else:
-        title_font = label_font = tick_font = legend_font = legend_small_font = ImageFont.load_default()
+        title_font = label_font = tick_font = legend_small_font = ImageFont.load_default()
 
     def fitted_legend_font(label: str, max_width: int):
         if not font_path.exists():
             return legend_small_font
-        for size in range(18, 7, -1):
+        for size in range(20, 10, -1):
             font = ImageFont.truetype(str(font_path), size)
             bbox = draw.textbbox((0, 0), label, font=font)
             if bbox[2] - bbox[0] <= max_width:
@@ -1083,52 +1084,52 @@ def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max
             return ""
         return f"脆断：{brittle_count} 条"
 
-    def fmt_perf(value: Any, digits: int = 0) -> str:
-        number = to_float(value)
-        if number is None:
-            return "-"
-        return f"{number:.{digits}f}"
-
     def legend_label(curve: dict[str, Any]) -> str:
         label = curve["sample_id"] or curve["run_name"]
         mode = curve.get("fracture_mode")
         if mode == "脆断":
             label = f"[{mode}] {label}"
-        rp02 = fmt_perf(curve.get("rp02_mpa"), 0)
-        rm = fmt_perf(curve.get("rm_mpa"), 0)
-        e = fmt_perf(curve.get("e_gpa"), 0)
-        au = fmt_perf(curve.get("uniform_elongation_percent"), 1)
-        at = fmt_perf(curve.get("at_percent"), 1)
-        return f"{label} | Rp0.2 {rp02} MPa | Rm {rm} MPa | 均匀 {au}% | 断裂 {at}% | E {e} GPa"
+        return label
 
     palette = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b",
-        "#e377c2", "#7f7f7f", "#bcbd22", "#17becf", "#4e79a7", "#f28e2b",
-        "#59a14f", "#e15759", "#76b7b2", "#edc949", "#af7aa1", "#ff9da7",
+        "#3B4CC0", "#B40426", "#2A9D8F", "#E9C46A", "#7A5195", "#EF5675",
+        "#003F5C", "#FFA600", "#4C78A8", "#F58518", "#54A24B", "#E45756",
+        "#72B7B2", "#B279A2", "#FF9DA6", "#9D755D", "#BAB0AC", "#577590",
     ]
 
-    draw.text((left, 35), title, fill="#111111", font=title_font)
+    if title:
+        draw.text((left, 38), title, fill="#111111", font=title_font)
     summary_text = fracture_summary_text()
     if summary_text:
-        draw.text((left, 88), summary_text, fill="#555555", font=tick_font)
+        draw.text((right - 210, 52), summary_text, fill="#555555", font=legend_small_font)
 
     for i in range(6):
         x = left + int((right - left) * i / 5)
-        draw.line((x, top, x, bottom), fill="#E0E0E0", width=1)
+        draw.line((x, bottom, x, bottom + 11), fill="#111111", width=2)
         value = x_min + (x_max - x_min) * i / 5
         text = x_tick_text(value)
-        draw.text((x - 28, bottom + 14), text, fill="#333333", font=tick_font)
+        text_box = draw.textbbox((0, 0), text, font=tick_font)
+        draw.text((x - (text_box[2] - text_box[0]) / 2, bottom + 18), text, fill="#222222", font=tick_font)
 
     for i in range(6):
         y = bottom - int((bottom - top) * i / 5)
-        draw.line((left, y, right, y), fill="#E0E0E0", width=1)
+        draw.line((left - 11, y, left, y), fill="#111111", width=2)
         value = y_min + (y_max - y_min) * i / 5
         text = f"{value:.0f}"
-        draw.text((left - 92, y - 14), text, fill="#333333", font=tick_font)
+        text_box = draw.textbbox((0, 0), text, font=tick_font)
+        draw.text((left - 24 - (text_box[2] - text_box[0]), y - 14), text, fill="#222222", font=tick_font)
 
-    draw.rectangle((left, top, right, bottom), outline="#333333", width=2)
-    draw.text(((left + right) // 2 - 58, bottom + 42), "\u5e94\u53d8 (%)", fill="#111111", font=label_font)
-    draw.text((20, (top + bottom) // 2 - 20), "\u5e94\u529b (MPa)", fill="#111111", font=label_font)
+    draw.line((left, top, left, bottom), fill="#111111", width=3)
+    draw.line((left, bottom, right, bottom), fill="#111111", width=3)
+    x_label = "Engineering strain (%)"
+    x_label_box = draw.textbbox((0, 0), x_label, font=label_font)
+    draw.text((((left + right) - (x_label_box[2] - x_label_box[0])) / 2, bottom + 58), x_label, fill="#111111", font=label_font)
+    y_label = "Engineering stress (MPa)"
+    y_box = draw.textbbox((0, 0), y_label, font=label_font)
+    y_layer = Image.new("RGBA", (y_box[2] - y_box[0] + 12, y_box[3] - y_box[1] + 12), (255, 255, 255, 0))
+    ImageDraw.Draw(y_layer).text((6, 2), y_label, fill="#111111", font=label_font)
+    y_layer = y_layer.rotate(90, expand=True)
+    image.paste(y_layer, (28, int((top + bottom - y_layer.height) / 2)), y_layer)
 
     legend_items: list[tuple[dict[str, Any], str, str]] = []
     for idx, (curve, raw_x, raw_y) in enumerate(plot_data):
@@ -1137,25 +1138,44 @@ def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max
         if len(points) < 2:
             continue
         color = palette[idx % len(palette)]
-        draw.line(points, fill=color, width=3, joint="curve")
+        draw.line(points, fill=color, width=4, joint="curve")
         legend_items.append((curve, color, legend_label(curve)))
 
-    draw.text((left, bottom + 76), "曲线标识与计算性能", fill="#111111", font=legend_font)
     col_w = (right - left) // legend_cols
     legend_rows_for_plot = legend_rows_by_status(legend_items[:max_legend])
     for row, row_items in enumerate(legend_rows_for_plot):
         for col, (_, color, label) in enumerate(row_items):
             legend_x = left + col * col_w
             legend_y = legend_top + row * legend_row_h
-            draw.line((legend_x, legend_y + 13, legend_x + 42, legend_y + 13), fill=color, width=5)
-            text_max_width = max(80, col_w - 58)
+            draw.line((legend_x, legend_y + 13, legend_x + 52, legend_y + 13), fill=color, width=5)
+            text_max_width = max(80, col_w - 72)
             item_font = fitted_legend_font(label, text_max_width)
-            draw.text((legend_x + 52, legend_y), label, fill="#222222", font=item_font)
+            draw.text((legend_x + 66, legend_y), label, fill="#222222", font=item_font)
     if len(legend_items) > max_legend:
         draw.text((left, height - 58), f"另有 {len(legend_items) - max_legend} 条曲线未在图例中展开，详见 curve_index.csv", fill="#555555", font=legend_small_font)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(out_path)
+    image.save(out_path, dpi=(300, 300), optimize=True)
+
+
+def write_plot_curves(path: Path, curves: list[dict[str, Any]]) -> None:
+    """Export only bounded, cleaned plotting data for the session UI."""
+    payload: list[dict[str, Any]] = []
+    for index, curve in enumerate(curves, start=1):
+        x, y = downsample_xy(list(curve.get("x") or []), list(curve.get("y") or []), 2000)
+        payload.append(
+            {
+                "curve_id": f"curve_{index:04d}",
+                "sample_id": curve.get("sample_id") or "",
+                "run_name": curve.get("run_name") or "",
+                "group": curve.get("group") or "",
+                "source_file": curve.get("source_file") or "",
+                "fracture_mode": curve.get("fracture_mode") or "",
+                "x": x,
+                "y": y,
+            }
+        )
+    path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
 def write_curve_index(path: Path, curves: list[dict[str, Any]], file_plot: str, group_plot: str) -> None:
@@ -1295,6 +1315,8 @@ def main() -> None:
         plot_curve_set(curves, out, f"{group} - \u62c9\u4f38\u66f2\u7ebf")
         write_group_table(curves, table_out)
         group_plot_map[group] = str(out)
+
+    write_plot_curves(output_root / "plot_curves.json", all_curves)
 
     index_path = output_root / "curve_index.csv"
     fields = [
