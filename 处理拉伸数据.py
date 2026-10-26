@@ -37,6 +37,9 @@ SUSPECT_YIELD_MAX_RP_RM_RATIO = 0.60
 SUSPECT_YIELD_MAX_DIRECT_FRACTURE_STRAIN_PERCENT = 5.0
 SUSPECT_YIELD_MAX_POST_PEAK_STRAIN_PERCENT = 0.25
 SUSPECT_YIELD_MAX_E_GPA = 80.0
+FRACTURE_VERTICAL_MIN_DROP_MPA = 25.0
+FRACTURE_VERTICAL_MIN_DROP_FRACTION = 0.08
+FRACTURE_VERTICAL_MIN_SLOPE_MPA_PER_PERCENT = 2500.0
 
 
 def clean(value: Any) -> str:
@@ -618,9 +621,16 @@ def trim_fracture_stress_drop(
     for idx in range(max(1, peak_idx + 1), n):
         prev_stress = stress_mpa[idx - 1]
         curr_stress = stress_mpa[idx]
-        sudden_drop = prev_stress >= high_level and curr_stress <= low_level and (prev_stress - curr_stress) >= min_drop
+        stress_drop = prev_stress - curr_stress
+        strain_step = abs(strain_percent[idx] - strain_percent[idx - 1])
+        near_vertical_drop = (
+            prev_stress >= high_level
+            and stress_drop >= max(FRACTURE_VERTICAL_MIN_DROP_MPA, peak_stress * FRACTURE_VERTICAL_MIN_DROP_FRACTION)
+            and stress_drop / max(strain_step, 1e-9) >= FRACTURE_VERTICAL_MIN_SLOPE_MPA_PER_PERCENT
+        )
+        sudden_drop = prev_stress >= high_level and curr_stress <= low_level and stress_drop >= min_drop
         negative_after_peak = prev_stress >= high_level and curr_stress < 0
-        if sudden_drop or negative_after_peak:
+        if near_vertical_drop or sudden_drop or negative_after_peak:
             return strain_percent[:idx], stress_mpa[:idx], n - idx
 
     return strain_percent[:n], stress_mpa[:n], 0

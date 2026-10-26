@@ -336,6 +336,30 @@ def test_custom_plotting_requires_at_least_one_curve():
         web.build_plot_outputs([], mode="overlay", title="")
 
 
+def test_near_vertical_post_peak_drop_is_trimmed_before_the_drop():
+    cli = api()._plot_module()
+    strain = [0.0, 1.0, 2.0, 3.0, 3.1, 3.105, 3.11]
+    stress = [0.0, 400.0, 800.0, 900.0, 875.0, 560.0, 100.0]
+
+    clean_x, clean_y, trimmed = cli.trim_fracture_stress_drop(strain, stress)
+
+    assert clean_x == strain[:5]
+    assert clean_y == stress[:5]
+    assert trimmed == 2
+
+
+def test_gradual_post_peak_necking_is_not_mistaken_for_vertical_fracture_drop():
+    cli = api()._plot_module()
+    strain = [0.0, 1.0, 2.0, 3.0, 3.1, 3.2, 3.3]
+    stress = [0.0, 400.0, 800.0, 900.0, 860.0, 820.0, 780.0]
+
+    clean_x, clean_y, trimmed = cli.trim_fracture_stress_drop(strain, stress)
+
+    assert clean_x == strain
+    assert clean_y == stress
+    assert trimmed == 0
+
+
 def test_separate_mode_limits_one_request_to_24_high_resolution_images():
     web = api()
     curves = [
