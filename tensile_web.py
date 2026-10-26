@@ -4,8 +4,6 @@ There is deliberately no Streamlit dependency or result cache in this module.
 Each call owns one temporary directory and one child process. Only result bytes
 escape that directory; callers decide how long to keep them in their session.
 """
-from __future__ import annotations
-
 from dataclasses import dataclass
 from io import BytesIO, StringIO
 from pathlib import Path, PurePosixPath

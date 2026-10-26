@@ -24,6 +24,18 @@ def api():
     return importlib.import_module("tensile_web")
 
 
+def test_adapter_supports_streamlit_style_hot_reload_without_module_registration():
+    module_name = "_tensile_web_hot_reload_probe"
+    sys.modules.pop(module_name, None)
+    spec = importlib.util.spec_from_file_location(module_name, Path(__file__).with_name("tensile_web.py"))
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+
+    spec.loader.exec_module(module)
+
+    assert module.Upload("curve.csv", b"data").name == "curve.csv"
+
+
 def csv_curve(sample="C991-合成演示-1"):
     stream = StringIO(newline="")
     writer = csv.writer(stream)
