@@ -42,3 +42,38 @@ def test_changed_upload_fingerprint_invalidates_old_upload_result():
     assert not app.exception
     assert not app.metric
     assert not app.get("download_button")
+
+
+def test_pandat_page_runs_c63_demo_and_offers_plot_downloads():
+    app = AppTest.from_file(str(APP)).run()
+
+    app.radio(key="tool_selector").set_value("Pandat 相图").run()
+
+    assert not app.exception
+    assert any("Pandat 线计算" in element.value for element in app.markdown)
+    assert app.button(key="run_pandat_demo")
+    app.button(key="run_pandat_demo").click().run(timeout=60)
+    assert not app.exception
+    assert app.success
+    metrics = {metric.label: metric.value for metric in app.metric}
+    assert metrics["相数"] == "8"
+    assert metrics["相区数"] == "12"
+    assert "1179" in metrics["熔化区间"]
+    assert "1372" in metrics["熔化区间"]
+    assert len(app.dataframe) >= 1
+    download_labels = {button.label for button in app.get("download_button")}
+    assert {"下载 PNG", "下载 PDF", "下载相分数 CSV", "下载相区 CSV", "下载元数据 JSON"} <= download_labels
+
+
+def test_changed_pandat_inputs_invalidate_previous_result():
+    app = AppTest.from_file(str(APP)).run()
+    app.radio(key="tool_selector").set_value("Pandat 相图").run()
+    app.button(key="run_pandat_demo").click().run(timeout=60)
+    assert app.metric
+    assert len(app.get("download_button")) == 5
+
+    app.text_input(key="pandat_sample_name").set_value("Different-Sample").run()
+
+    assert not app.exception
+    assert not app.metric
+    assert not app.get("download_button")

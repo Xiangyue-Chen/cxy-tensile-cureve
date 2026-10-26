@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import hashlib
 from io import BytesIO
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import zipfile
 
 import streamlit as st
 
+from pandat_web import PandatError, PandatResult, build_download_bundle, parse_pandat_line
 from tensile_web import (
     ProcessingError,
     ProcessingResult,
@@ -239,6 +240,216 @@ def _show_results(result: ProcessingResult) -> None:
                 f"下载 {name}", data=data, file_name=PurePosixPath(name).name,
                 mime=mime, key=f"download_file_{index}",
             )
+
+
+def _pandat_melting_text(result: PandatResult) -> str:
+    if result.melting_start_C is not None and result.melting_end_C is not None:
+        return f"{result.melting_start_C:.0f}–{result.melting_end_C:.0f} ℃"
+    if result.melting_start_C is not None:
+        return f"{result.melting_start_C:.0f} ℃起，未完全液化"
+    return "未检测到液相"
+
+
+def _clear_pandat_result() -> None:
+    st.session_state.pandat_result = None
+    st.session_state.pandat_files = None
+    st.session_state.pandat_source = None
+    st.session_state.pandat_processed_name = None
+
+
+def _pandat_fingerprint(uploaded, sample_name: str, threshold: float) -> str:
+    digest = hashlib.sha256()
+    digest.update(sample_name.encode("utf-8", errors="replace"))
+    digest.update(repr(threshold).encode("ascii"))
+    if uploaded is None:
+        digest.update(b"no-upload")
+    else:
+        data = uploaded.getvalue()
+        digest.update(uploaded.name.encode("utf-8", errors="replace"))
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(hashlib.sha256(data).digest())
+    return digest.hexdigest()
+
+
+def _run_pandat(data: bytes, *, filename: str, sample_name: str, threshold: float, source: str) -> None:
+    try:
+        with st.spinner("正在解析原生相分数、识别相区并生成图片…"):
+            result = parse_pandat_line(
+                data,
+                filename=filename,
+                phase_threshold=threshold,
+            )
+            files = build_download_bundle(result, sample_name=sample_name)
+        st.session_state.pandat_result = result
+        st.session_state.pandat_files = files
+        st.session_state.pandat_source = source
+        st.session_state.pandat_processed_name = sample_name
+    except PandatError as exc:
+        _clear_pandat_result()
+        st.error(str(exc))
+
+
+def _show_pandat_page() -> None:
+    st.markdown(
+        """
+        <section class="hero">
+          <div class="eyebrow">PANDAT LINE RESULT WORKBENCH</div>
+          <h1>Pandat 相图在线整理</h1>
+          <p>上传 Pandat 线计算导出的 DAT 文件，自动生成独立相分数曲线、25 ℃相内成分说明、相区带和熔化区间。</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.warning(
+        "网页不运行 Pandat，也不包含热力学数据库或许可证；请先在有授权的本机完成平衡线计算，再上传导出的结果。"
+    )
+    if "pandat_result" not in st.session_state:
+        st.session_state.pandat_result = None
+    if "pandat_files" not in st.session_state:
+        st.session_state.pandat_files = None
+    if "pandat_source" not in st.session_state:
+        st.session_state.pandat_source = None
+    if "pandat_processed_name" not in st.session_state:
+        st.session_state.pandat_processed_name = None
+    if "pandat_input_fingerprint" not in st.session_state:
+        st.session_state.pandat_input_fingerprint = ""
+
+    st.markdown("<p class='step'>01 · 上传 Pandat 线计算结果</p>", unsafe_allow_html=True)
+    uploaded = st.file_uploader(
+        "上传 Pandat DAT/TXT",
+        type=["dat", "txt"],
+        accept_multiple_files=False,
+        max_upload_size=20,
+        help="需要包含 T、f(@相名) 列；若包含 x(元素@相名) 列，网页会同时显示25 ℃相内成分。",
+        key="pandat_upload",
+    )
+    sample_name = st.text_input(
+        "样品名称",
+        value="C63(C9)",
+        max_chars=80,
+        key="pandat_sample_name",
+    )
+    threshold = st.number_input(
+        "相存在阈值（摩尔分数）",
+        min_value=1e-12,
+        max_value=1e-2,
+        value=1e-8,
+        format="%.1e",
+        help="低于该值的数值仍保留在曲线和CSV中，但不计入相区组合。",
+        key="pandat_phase_threshold",
+    )
+    current_fingerprint = _pandat_fingerprint(uploaded, sample_name, float(threshold))
+    if current_fingerprint != st.session_state.pandat_input_fingerprint:
+        if st.session_state.pandat_result is not None:
+            _clear_pandat_result()
+        st.session_state.pandat_input_fingerprint = current_fingerprint
+    left, middle, right = st.columns([1.15, 1, 1])
+    with left:
+        if st.button(
+            "开始生成相图",
+            type="primary",
+            disabled=uploaded is None,
+            key="run_pandat_upload",
+            width="stretch",
+        ):
+            _run_pandat(
+                uploaded.getvalue(),
+                filename=uploaded.name,
+                sample_name=sample_name.strip() or PurePosixPath(uploaded.name).stem,
+                threshold=float(threshold),
+                source="upload",
+            )
+    with middle:
+        if st.button("运行 C63(C9) 示例", key="run_pandat_demo", width="stretch"):
+            demo = Path(__file__).with_name("examples") / "C63_C9_line_up.dat"
+            _run_pandat(
+                demo.read_bytes(),
+                filename=demo.name,
+                sample_name=sample_name.strip() or "C63(C9)",
+                threshold=float(threshold),
+                source="demo",
+            )
+    with right:
+        if st.button(
+            "清除当前结果",
+            disabled=st.session_state.pandat_result is None,
+            key="clear_pandat_result",
+            width="stretch",
+        ):
+            _clear_pandat_result()
+
+    with st.expander("Pandat 导出格式说明"):
+        st.markdown(
+            """
+            - 在 Pandat 中完成 25–1500 ℃或其它温区的线计算后，导出制表符结果文件。
+            - 文件必须包含 `T` 和至少一个 `f(@相名)` 列；`T` 单位行写 `K` 或 `C/℃`。
+            - `x(元素@相名)` 列用于生成室温相内成分说明；缺少这些列仍可绘制相分数曲线。
+            - 相变温度处的重复行会按最后一行归并，避免生成零宽度伪相区。
+            - 网页展示的是热力学平衡预测，不等同于实际冷却组织或实验验证。
+            """
+        )
+
+    st.markdown("<p class='step'>02 · 查看并下载</p>", unsafe_allow_html=True)
+    result = st.session_state.pandat_result
+    files = st.session_state.pandat_files
+    if result is None or files is None:
+        st.info("上传 Pandat 线计算结果后点击“开始生成相图”，或运行 C63(C9) 示例查看效果。")
+        return
+    st.success(f"处理完成：识别到 {len(result.phases)} 个相、{len(result.regions)} 个原生相区。")
+    if st.session_state.pandat_source == "demo":
+        st.info("当前为已验证的 C63(C9) 示例数据，熔化区间约为 1179–1372 ℃。")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("温度范围", f"{result.temperatures_C[0]:.0f}–{result.temperatures_C[-1]:.0f} ℃")
+    col2.metric("相数", str(len(result.phases)))
+    col3.metric("相区数", str(len(result.regions)))
+    col4.metric("熔化区间", _pandat_melting_text(result))
+    processed_name = st.session_state.pandat_processed_name or result.filename
+    st.image(files["phase_diagram.png"], caption=f"{processed_name} · Pandat 平衡相分数", width="stretch")
+
+    st.subheader("相区表")
+    st.dataframe(
+        [
+            {
+                "起始温度 (℃)": round(region.lower_C, 6),
+                "终止温度 (℃)": round(region.upper_C, 6),
+                "原生相组合": " + ".join(region.phases),
+            }
+            for region in result.regions
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+    st.subheader("下载结果")
+    download_columns = st.columns(5)
+    downloads = [
+        ("下载 PNG", "phase_diagram.png", "image/png"),
+        ("下载 PDF", "phase_diagram.pdf", "application/pdf"),
+        ("下载相分数 CSV", "phase_fractions.csv", "text/csv"),
+        ("下载相区 CSV", "phase_regions.csv", "text/csv"),
+        ("下载元数据 JSON", "phase_metadata.json", "application/json"),
+    ]
+    for index, (label, filename, mime) in enumerate(downloads):
+        with download_columns[index]:
+            st.download_button(
+                label,
+                data=files[filename],
+                file_name=filename,
+                mime=mime,
+                key=f"download_pandat_{index}",
+                width="stretch",
+            )
+    st.caption("上传数据仅用于当前会话内存处理；导出结果不会包含原始 DAT 文件。")
+
+
+tool = st.radio(
+    "选择工具",
+    ["拉伸曲线", "Pandat 相图"],
+    horizontal=True,
+    key="tool_selector",
+)
+if tool == "Pandat 相图":
+    _show_pandat_page()
+    st.stop()
 
 
 st.markdown(
