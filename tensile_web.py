@@ -39,6 +39,10 @@ _TEXT_FIELDS = {
     "sample_id", "group", "fracture_mode", "curve_note", "modulus_flag",
     "yield_flag", "file_plot", "group_plot",
 }
+_PLOT_NUMBER_FIELDS = {
+    "rp02_mpa", "yield_strain_percent", "rm_mpa",
+    "uniform_elongation_percent", "at_percent",
+}
 
 
 @dataclass(frozen=True)
@@ -309,6 +313,10 @@ def _load_plot_curves(path: Path, expected_count: int) -> list[dict[str, object]
                 not 2 <= len(x) == len(y) <= 2000 or
                 any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in (*x, *y))):
             raise ProcessingError("可选曲线数据格式无效，请重新处理文件。")
+        for field in _PLOT_NUMBER_FIELDS:
+            value = item.get(field)
+            if value is not None and (not isinstance(value, (int, float)) or not math.isfinite(value)):
+                raise ProcessingError("可选曲线性能点格式无效，请重新处理文件。")
         seen.add(curve_id)
         curves.append(item)
     return curves
@@ -329,7 +337,13 @@ def _plot_file_name(curve: dict[str, object], index: int) -> str:
     return f"{index:02d}_{safe}.png"
 
 
-def build_plot_outputs(curves: list[dict[str, object]], *, mode: str, title: str) -> dict[str, bytes]:
+def build_plot_outputs(
+    curves: list[dict[str, object]],
+    *,
+    mode: str,
+    title: str,
+    mark_performance_points: bool = True,
+) -> dict[str, bytes]:
     """Render selected session curves as one overlay or separate publication PNGs."""
     if not curves:
         raise ProcessingError("请至少选择一条曲线后再生成图片。")
@@ -349,7 +363,13 @@ def build_plot_outputs(curves: list[dict[str, object]], *, mode: str, title: str
             ]
             for name, batch in batches:
                 target = root / name
-                module.plot_curve_set(batch, target, title, max_legend=24)
+                module.plot_curve_set(
+                    batch,
+                    target,
+                    title,
+                    max_legend=24,
+                    mark_performance_points=mark_performance_points,
+                )
                 if not target.is_file():
                     raise ProcessingError("所选曲线无法生成图片，请检查数据。")
                 outputs[name] = target.read_bytes()

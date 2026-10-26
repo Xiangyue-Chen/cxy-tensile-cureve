@@ -63,13 +63,13 @@ def _fingerprint(uploaded_files) -> str:
 def _clear_result() -> None:
     st.session_state.result = None
     st.session_state.result_source = None
-    for key in ("plot_curve_selection", "plot_mode", "plot_title", "custom_plot_preview", "preview_image"):
+    for key in ("plot_curve_selection", "plot_mode", "mark_performance_points", "plot_title", "custom_plot_preview", "preview_image"):
         st.session_state.pop(key, None)
 
 
 def _run(uploads: list[Upload], source: str) -> None:
     try:
-        for key in ("plot_curve_selection", "plot_mode", "plot_title", "custom_plot_preview", "preview_image"):
+        for key in ("plot_curve_selection", "plot_mode", "mark_performance_points", "plot_title", "custom_plot_preview", "preview_image"):
             st.session_state.pop(key, None)
         with st.spinner("正在识别曲线、计算性能并生成结果…"):
             st.session_state.result = process_uploads(uploads)
@@ -111,6 +111,12 @@ def _show_custom_plotter(result: ProcessingResult) -> None:
         horizontal=True,
         key="plot_mode",
     )
+    mark_performance_points = st.checkbox(
+        "标注性能点（Rp0.2、Rm、Ag、At）",
+        value=True,
+        key="mark_performance_points",
+        help="缺失或自动判据未通过的指标不会标注。Ag 与 Rm 对应同一峰值位置，Ag 以横轴三角形和引导线表示。",
+    )
     title = st.text_input(
         "图标题（留空则不显示）",
         value="Tensile stress–strain curves",
@@ -125,6 +131,7 @@ def _show_custom_plotter(result: ProcessingResult) -> None:
             [curve_map[curve_id] for curve_id in selected_ids],
             mode="overlay" if mode_label == "叠加对比" else "separate",
             title=title.strip(),
+            mark_performance_points=mark_performance_points,
         )
     except ProcessingError as exc:
         st.error(str(exc))

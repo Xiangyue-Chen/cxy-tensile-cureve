@@ -23,6 +23,7 @@ def test_demo_runs_real_pipeline_and_clear_removes_results():
     assert int(app.metric[0].value) > 0
     assert len(app.multiselect(key="plot_curve_selection").value) == 2
     assert app.radio(key="plot_mode").value == "叠加对比"
+    assert app.checkbox(key="mark_performance_points").value is True
     assert app.text_input(key="plot_title").value == "Tensile stress–strain curves"
     assert len(app.get("download_button")) >= 3
     app.button(key="clear_results").click().run()

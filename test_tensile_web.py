@@ -269,6 +269,8 @@ def test_demo_exposes_bounded_curve_data_for_custom_plotting():
         assert 2 <= len(curve["x"]) == len(curve["y"]) <= 2000
         assert all(isinstance(value, (int, float)) for value in curve["x"])
         assert all(isinstance(value, (int, float)) for value in curve["y"])
+        for field in ("rp02_mpa", "yield_strain_percent", "rm_mpa", "uniform_elongation_percent", "at_percent"):
+            assert isinstance(curve[field], (int, float))
     assert "plot_curves.json" not in result.files
 
 
@@ -292,6 +294,26 @@ def test_overlay_mode_returns_one_png_containing_multiple_curve_colors():
             if max(pixel) - min(pixel) >= 60 and max(pixel) < 245
         }
         assert len(saturated_colors) >= 2
+
+
+def test_performance_point_switch_changes_the_rendered_figure():
+    web = api()
+    result = web.process_uploads(web.make_demo_uploads())
+
+    marked = web.build_plot_outputs(
+        result.plot_curves,
+        mode="overlay",
+        title="",
+        mark_performance_points=True,
+    )
+    plain = web.build_plot_outputs(
+        result.plot_curves,
+        mode="overlay",
+        title="",
+        mark_performance_points=False,
+    )
+
+    assert marked["selected_curves.png"] != plain["selected_curves.png"]
 
 
 def test_separate_mode_returns_one_png_per_selected_curve():

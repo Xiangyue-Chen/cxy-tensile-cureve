@@ -990,7 +990,13 @@ def load_csv_curve(path: Path, root: Path) -> list[dict[str, Any]]:
     return [record] if record else []
 
 
-def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max_legend: int = 60) -> None:
+def plot_curve_set(
+    curves: list[dict[str, Any]],
+    out_path: Path,
+    title: str,
+    max_legend: int = 60,
+    mark_performance_points: bool = True,
+) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
     plot_data: list[tuple[dict[str, Any], list[float], list[float]]] = []
@@ -1017,7 +1023,8 @@ def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max
     left, top, right, bottom = 175, (145 if title else 100), width - 110, 1000
     legend_top = bottom + 105
     legend_row_h = 42
-    height = legend_top + legend_rows * legend_row_h + 80
+    marker_legend_h = 58 if mark_performance_points else 0
+    height = legend_top + legend_rows * legend_row_h + marker_legend_h + 80
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
 
@@ -1069,6 +1076,29 @@ def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max
 
     def sy(value: float) -> int:
         return int(bottom - (value - y_min) / (y_max - y_min) * (bottom - top))
+
+    def nearest_y(raw_x: list[float], raw_y: list[float], target_x: float) -> float | None:
+        if not raw_x or not raw_y:
+            return None
+        index = min(range(min(len(raw_x), len(raw_y))), key=lambda idx: abs(raw_x[idx] - target_x))
+        return float(raw_y[index])
+
+    def draw_marker(kind: str, px: int, py: int, color: str, radius: int = 10) -> None:
+        if kind == "yield":
+            draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill="white", outline=color, width=4)
+        elif kind == "rm":
+            points = [(px, py - radius - 2), (px + radius + 2, py), (px, py + radius + 2), (px - radius - 2, py)]
+            draw.polygon(points, fill=color)
+        elif kind == "ag":
+            points = [(px, py - radius - 3), (px + radius + 2, py + radius), (px - radius - 2, py + radius)]
+            draw.polygon(points, fill=color)
+        elif kind == "at":
+            draw.rectangle((px - radius, py - radius, px + radius, py + radius), fill="white", outline=color, width=4)
+
+    def draw_vertical_guide(px: int, start_y: int, color: str) -> None:
+        low, high = sorted((start_y, bottom))
+        for y in range(low, high, 22):
+            draw.line((px, y, px, min(y + 10, high)), fill=color, width=2)
 
     def x_tick_text(value: float) -> str:
         span = abs(x_max - x_min)
@@ -1139,6 +1169,26 @@ def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max
             continue
         color = palette[idx % len(palette)]
         draw.line(points, fill=color, width=4, joint="curve")
+        if mark_performance_points:
+            yield_x = to_float(curve.get("yield_strain_percent"))
+            yield_y = to_float(curve.get("rp02_mpa"))
+            if yield_x is not None and yield_y is not None and x_min <= yield_x <= x_max and y_min <= yield_y <= y_max:
+                draw_marker("yield", sx(yield_x), sy(yield_y), color)
+
+            ag_x = to_float(curve.get("uniform_elongation_percent"))
+            rm_y = to_float(curve.get("rm_mpa"))
+            if ag_x is not None and x_min <= ag_x <= x_max:
+                peak_y = rm_y if rm_y is not None else nearest_y(raw_x, raw_y, ag_x)
+                if peak_y is not None and y_min <= peak_y <= y_max:
+                    draw_marker("rm", sx(ag_x), sy(peak_y), color)
+                    draw_vertical_guide(sx(ag_x), sy(peak_y), color)
+                    draw_marker("ag", sx(ag_x), bottom - 13, color, radius=8)
+
+            at_x = to_float(curve.get("at_percent"))
+            if at_x is not None and x_min <= at_x <= x_max:
+                at_y = nearest_y(raw_x, raw_y, at_x)
+                if at_y is not None and y_min <= at_y <= y_max:
+                    draw_marker("at", sx(at_x), sy(at_y), color)
         legend_items.append((curve, color, legend_label(curve)))
 
     col_w = (right - left) // legend_cols
@@ -1153,6 +1203,20 @@ def plot_curve_set(curves: list[dict[str, Any]], out_path: Path, title: str, max
             draw.text((legend_x + 66, legend_y), label, fill="#222222", font=item_font)
     if len(legend_items) > max_legend:
         draw.text((left, height - 58), f"另有 {len(legend_items) - max_legend} 条曲线未在图例中展开，详见 curve_index.csv", fill="#555555", font=legend_small_font)
+    if mark_performance_points:
+        marker_y = legend_top + legend_rows * legend_row_h + 25
+        marker_items = [
+            ("yield", "Rp0.2 (yield)"),
+            ("rm", "Rm"),
+            ("ag", "Ag (uniform elongation)"),
+            ("at", "At (fracture)"),
+        ]
+        marker_x = left
+        for kind, label in marker_items:
+            draw_marker(kind, marker_x + 12, marker_y + 8, "#222222", radius=8)
+            draw.text((marker_x + 34, marker_y - 5), label, fill="#222222", font=legend_small_font)
+            label_box = draw.textbbox((0, 0), label, font=legend_small_font)
+            marker_x += 58 + (label_box[2] - label_box[0])
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(out_path, dpi=(300, 300), optimize=True)
@@ -1171,6 +1235,11 @@ def write_plot_curves(path: Path, curves: list[dict[str, Any]]) -> None:
                 "group": curve.get("group") or "",
                 "source_file": curve.get("source_file") or "",
                 "fracture_mode": curve.get("fracture_mode") or "",
+                "rp02_mpa": curve.get("rp02_mpa"),
+                "yield_strain_percent": curve.get("yield_strain_percent"),
+                "rm_mpa": curve.get("rm_mpa"),
+                "uniform_elongation_percent": curve.get("uniform_elongation_percent"),
+                "at_percent": curve.get("at_percent"),
                 "x": x,
                 "y": y,
             }
